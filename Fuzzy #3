@@ -1,0 +1,160 @@
+#include <Fuzzy.h>
+#include <FuzzyComposition.h>
+#include <FuzzyInput.h>
+#include <FuzzyIO.h>
+#include <FuzzyOutput.h>
+#include <FuzzyRule.h>
+#include <FuzzyRuleAntecedent.h>
+#include <FuzzyRuleConsequent.h>
+#include <FuzzySet.h>
+
+// Pin Ultrasonic
+const int trigPin = 6;
+const int echoPin = 5;
+
+// Pin Rotary Encoder HC-020K
+const int encoderPin = 2; // Interrupt pin
+
+// Pin Motor Driver L298N (Motor A)
+const int ENA = 9;
+const int IN1 = 8;
+const int IN2 = 7;
+
+// Pin Motor Driver L298N (Motor B)
+const int ENB = 10;
+const int IN3 = 12;
+const int IN4 = 11;
+
+// Potensiometer
+const int potPin = A0;
+
+// Variabel Rotary Encoder
+volatile unsigned int pulseCount = 0;
+unsigned long lastTime = 0;
+float speedRPM = 0;
+
+Fuzzy *fuzzy = new Fuzzy();
+
+void countPulse() {
+  pulseCount++;
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  // Setup Ultrasonic
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // Setup Encoder
+  pinMode(encoderPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(encoderPin), countPulse, RISING);
+
+  // Setup Motor
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  // Setup Potensiometer
+  pinMode(potPin, INPUT);
+
+  // Inisialisasi Motor mati
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+
+  // Inisialisasi Fuzzy
+  FuzzyInput *kecepatan = new FuzzyInput(1);
+  FuzzySet *kecepatanSet[5];
+  kecepatanSet[0] = new FuzzySet(0, 0, 10, 30);
+  kecepatanSet[1] = new FuzzySet(10, 30, 40, 50);
+  kecepatanSet[2] = new FuzzySet(40, 50, 60, 70);
+  kecepatanSet[3] = new FuzzySet(60, 70, 80, 90);
+  kecepatanSet[4] = new FuzzySet(80, 90, 100, 100);
+  for (int i = 0; i < 5; i++) kecepatan->addFuzzySet(kecepatanSet[i]);
+  fuzzy->addFuzzyInput(kecepatan);
+
+  FuzzyInput *jarak = new FuzzyInput(2);
+  FuzzySet *jarakSet[5];
+  jarakSet[0] = new FuzzySet(0, 0, 5, 10);
+  jarakSet[1] = new FuzzySet(5, 10, 15, 20);
+  jarakSet[2] = new FuzzySet(15, 20, 30, 35);
+  jarakSet[3] = new FuzzySet(30, 35, 40, 45);
+  jarakSet[4] = new FuzzySet(40, 45, 50, 50);
+  for (int i = 0; i < 5; i++) jarak->addFuzzySet(jarakSet[i]);
+  fuzzy->addFuzzyInput(jarak);
+
+  FuzzyOutput *pengereman = new FuzzyOutput(1);
+  FuzzySet *remSet[5];
+  remSet[0] = new FuzzySet(0, 0, 10, 20);
+  remSet[1] = new FuzzySet(10, 20, 30, 40);
+  remSet[2] = new FuzzySet(30, 40, 50, 60);
+  remSet[3] = new FuzzySet(50, 60, 70, 80);
+  remSet[4] = new FuzzySet(70, 80, 100, 100);
+  for (int i = 0; i < 5; i++) pengereman->addFuzzySet(remSet[i]);
+  fuzzy->addFuzzyOutput(pengereman);
+
+  // Aturan fuzzy 25 kombinasi manual dengan if-else style
+  int ruleNum = 1;
+  for (int i = 0; i < 5; i++) {
+    for (int j = 0; j < 5; j++) {
+      FuzzyRuleAntecedent *antecedent = new FuzzyRuleAntecedent();
+      antecedent->joinWithAND(kecepatanSet[i], jarakSet[j]);
+
+      FuzzyRuleConsequent *consequent = new FuzzyRuleConsequent();
+      int remIndex = constrain(i + (4 - j), 0, 4);
+      consequent->addOutput(remSet[remIndex]);
+
+      FuzzyRule *rule = new FuzzyRule(ruleNum++, antecedent, consequent);
+      fuzzy->addFuzzyRule(rule);
+    }
+  }
+}
+
+void loop() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  int distance = duration * 0.034 / 2;
+  distance = constrain(distance, 0, 100);
+
+  unsigned long currentTime = millis();
+  if (currentTime - lastTime >= 1000) {
+    speedRPM = (pulseCount / 20.0) * 60.0;
+    pulseCount = 0;
+    lastTime = currentTime;
+  }
+
+  float speedMapped = constrain(speedRPM, 0, 100);
+
+  fuzzy->setInput(1, speedMapped);
+  fuzzy->setInput(2, distance);
+  fuzzy->fuzzify();
+  int brakeValue = fuzzy->defuzzify(1);
+
+  int pwmOutput = map(brakeValue, 0, 100, 255, 0);
+  if (distance <= 5) pwmOutput = 0;
+  pwmOutput = constrain(pwmOutput, 0, 255);
+
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, pwmOutput);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  analogWrite(ENB, pwmOutput);
+
+  Serial.println("================================");
+  Serial.print("Jarak (cm): "); Serial.println(distance);
+  Serial.print("Kecepatan (RPM): "); Serial.println(speedRPM);
+  Serial.print("Pengereman: "); Serial.println(brakeValue);
+  Serial.print("PWM Motor: "); Serial.println(pwmOutput);
+  Serial.print("Pulse Count: "); Serial.println(pulseCount);
+  Serial.println("================================");
+
+  delay(1000);
+}
