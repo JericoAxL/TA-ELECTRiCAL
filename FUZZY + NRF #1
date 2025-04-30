@@ -137,7 +137,7 @@ void loop() {
   digitalWrite(trigPin, LOW);
   long duration = pulseIn(echoPin, HIGH, 30000);
   int distance = duration * 0.034 / 2;
-  distance = constrain(distance, 0, 50);
+  distance = constrain(distance, 0, 100);
 
   // Hitung RPM dari encoder
   unsigned long now = millis();
@@ -173,5 +173,5 @@ void loop() {
   Serial.print("Final PWM: "); Serial.println(finalPWM);
   Serial.println("================");
 
-  delay(100);
+  delay(1000);
 }
