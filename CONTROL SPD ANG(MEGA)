@@ -1,0 +1,70 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include <Servo.h>
+
+// Pin NRF24L01
+#define CE_PIN 9
+#define CSN_PIN 8
+
+// Motor Driver L298N (Motor B)
+#define ENB 10
+#define IN3 12
+#define IN4 11
+
+// Servo Pin
+#define SERVO_PIN 13
+
+RF24 radio(CE_PIN, CSN_PIN);
+const byte address[6] = "00001";
+
+struct DataPacket {
+  int motorSpeed;
+  int servoAngle;
+} data;
+
+Servo steeringServo;
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("RX Ready - Arduino Mega");
+
+  // Setup NRF24L01
+  if (!radio.begin()) {
+    Serial.println("❌ NRF24L01 Tidak Terdeteksi!");
+    while (1);
+  }
+  radio.openReadingPipe(0, address);
+  radio.setPALevel(RF24_PA_LOW);
+  radio.setDataRate(RF24_250KBPS);
+  radio.startListening();
+
+  // Setup motor dan servo
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  steeringServo.attach(SERVO_PIN);
+
+  Serial.println("✅ NRF24L01 Siap Menerima...");
+}
+
+void loop() {
+  if (radio.available()) {
+    radio.read(&data, sizeof(data));
+
+    // Motor: arah maju
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, data.motorSpeed);
+
+    // Servo: arah roda depan
+    steeringServo.write(data.servoAngle);
+
+    // Tampilkan data (ringkas dan cepat)
+    Serial.print("SPD:");
+    Serial.print(data.motorSpeed);
+    Serial.print(" | ANG:");
+    Serial.println(data.servoAngle);
+  }
+}
