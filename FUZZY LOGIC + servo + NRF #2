@@ -1,6 +1,7 @@
 #include <SPI.h>
 #include <nRF24L01.h>
 #include <RF24.h>
+#include <Servo.h>
 
 #include <Fuzzy.h>
 #include <FuzzyComposition.h>
@@ -20,8 +21,11 @@ const byte address[6] = "00001";
 
 struct DataPacket {
   int motorSpeed;   // 0 - 255 dari TX
-  int servoAngle;
+  int servoAngle;   // 0 - 180 dari TX
 } data;
+
+// Servo
+Servo steerServo; // Servo untuk kendali arah (ban depan)
 
 // Ultrasonic Pins
 const int trigPin = 6;
@@ -70,8 +74,9 @@ void setup() {
   pinMode(ENB, OUTPUT);
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
-
   analogWrite(ENB, 0);
+
+  steerServo.attach(13); // Servo di pin 13
 
   // Fuzzy Input: Kecepatan
   FuzzyInput *kecepatan = new FuzzyInput(1);
@@ -168,6 +173,10 @@ void loop() {
   // Motor Aktif
   digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
   analogWrite(ENB, finalPWM);
+
+  // Gerakkan Servo dari data TX
+  int servoAngle = constrain(data.servoAngle, 0, 180);
+  steerServo.write(servoAngle);
 
   // Debug Serial
   Serial.println("================================");
