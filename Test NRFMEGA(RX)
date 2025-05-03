@@ -1,40 +1,24 @@
 #include <SPI.h>
 #include <nRF24L01.h>
 #include <RF24.h>
-#include <Servo.h>
 
-#define CE_PIN 48
-#define CSN_PIN 49
-
-RF24 radio(CE_PIN, CSN_PIN);
-
-
-// Pin Output
-#define MOTOR_PIN 5     // PWM output untuk motor DC (via driver)
-#define SERVO_PIN 13    // Servo pin (steering)
+#define CE_PIN 9    // CE ke pin 9
+#define CSN_PIN 8   // CSN ke pin 8
 
 RF24 radio(CE_PIN, CSN_PIN);
 const byte address[6] = "00001";
 
-Servo steeringServo;
-
-// Struct data yang diterima
 struct DataPacket {
   int motorSpeed;
   int servoAngle;
-} receivedData;
+} data;
 
 void setup() {
   Serial.begin(9600);
   Serial.println("RX Ready - Arduino Mega");
 
-  // Setup pin
-  pinMode(MOTOR_PIN, OUTPUT);
-  steeringServo.attach(SERVO_PIN);
-
-  // Inisialisasi NRF24L01
   if (!radio.begin()) {
-    Serial.println("NRF24L01 Tidak Terdeteksi!");
+    Serial.println("❌ NRF24L01 Tidak Terdeteksi!");
     while (1);
   }
 
@@ -43,21 +27,17 @@ void setup() {
   radio.setDataRate(RF24_250KBPS);
   radio.startListening();
 
-  Serial.println("NRF24L01 Siap Menerima...");
+  Serial.println("✅ NRF24L01 Siap Menerima...");
 }
 
 void loop() {
   if (radio.available()) {
-    radio.read(&receivedData, sizeof(receivedData));
+    radio.read(&data, sizeof(data));
 
-    // Tampilkan data
+    // Tampilkan data di Serial Monitor
     Serial.print("Speed: ");
-    Serial.print(receivedData.motorSpeed);
+    Serial.print(data.motorSpeed);
     Serial.print(" | Servo: ");
-    Serial.println(receivedData.servoAngle);
-
-    // Kendalikan motor dan servo
-    analogWrite(MOTOR_PIN, receivedData.motorSpeed);
-    steeringServo.write(receivedData.servoAngle);
+    Serial.println(data.servoAngle);
   }
 }
