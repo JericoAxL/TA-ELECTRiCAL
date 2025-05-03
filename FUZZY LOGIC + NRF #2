@@ -1,0 +1,183 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
+#include <Fuzzy.h>
+#include <FuzzyComposition.h>
+#include <FuzzyInput.h>
+#include <FuzzyIO.h>
+#include <FuzzyOutput.h>
+#include <FuzzyRule.h>
+#include <FuzzyRuleAntecedent.h>
+#include <FuzzyRuleConsequent.h>
+#include <FuzzySet.h>
+
+// NRF24L01
+#define CE_PIN 9
+#define CSN_PIN 8
+RF24 radio(CE_PIN, CSN_PIN);
+const byte address[6] = "00001";
+
+struct DataPacket {
+  int motorSpeed;   // 0 - 255 dari TX
+  int servoAngle;
+} data;
+
+// Ultrasonic Pins
+const int trigPin = 6;
+const int echoPin = 5;
+
+// Encoder Pin
+const int encoderPin = 2;
+
+// Motor Driver L298N (Motor B)
+const int ENB = 10;
+const int IN3 = 12;
+const int IN4 = 11;
+
+// Encoder Variables
+volatile unsigned int pulseCount = 0;
+unsigned long lastTime = 0;
+float speedRPM = 0;
+
+// Fuzzy Object
+Fuzzy *fuzzy = new Fuzzy();
+
+void countPulse() {
+  pulseCount++;
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  // NRF24 Setup
+  if (!radio.begin()) {
+    Serial.println("❌ NRF24L01 Tidak Terdeteksi!");
+    while (1);
+  }
+  radio.openReadingPipe(0, address);
+  radio.setPALevel(RF24_PA_LOW);
+  radio.setDataRate(RF24_250KBPS);
+  radio.startListening();
+  Serial.println("✅ NRF24L01 Siap Menerima...");
+
+  // Pin Setup
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(encoderPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(encoderPin), countPulse, RISING);
+
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  analogWrite(ENB, 0);
+
+  // Fuzzy Input: Kecepatan
+  FuzzyInput *kecepatan = new FuzzyInput(1);
+  FuzzySet *kecepatanSet[5] = {
+    new FuzzySet(0, 0, 10, 30),
+    new FuzzySet(10, 30, 40, 50),
+    new FuzzySet(40, 50, 60, 70),
+    new FuzzySet(60, 70, 80, 90),
+    new FuzzySet(80, 90, 100, 100)
+  };
+  for (int i = 0; i < 5; i++) kecepatan->addFuzzySet(kecepatanSet[i]);
+  fuzzy->addFuzzyInput(kecepatan);
+
+  // Fuzzy Input: Jarak
+  FuzzyInput *jarak = new FuzzyInput(2);
+  FuzzySet *jarakSet[5] = {
+    new FuzzySet(0, 0, 5, 10),
+    new FuzzySet(5, 10, 15, 20),
+    new FuzzySet(15, 20, 30, 35),
+    new FuzzySet(30, 35, 40, 45),
+    new FuzzySet(40, 45, 50, 50)
+  };
+  for (int i = 0; i < 5; i++) jarak->addFuzzySet(jarakSet[i]);
+  fuzzy->addFuzzyInput(jarak);
+
+  // Fuzzy Output: Pengereman
+  FuzzyOutput *pengereman = new FuzzyOutput(1);
+  FuzzySet *remSet[5] = {
+    new FuzzySet(0, 0, 10, 20),
+    new FuzzySet(10, 20, 30, 40),
+    new FuzzySet(30, 40, 50, 60),
+    new FuzzySet(50, 60, 70, 80),
+    new FuzzySet(70, 80, 100, 100)
+  };
+  for (int i = 0; i < 5; i++) pengereman->addFuzzySet(remSet[i]);
+  fuzzy->addFuzzyOutput(pengereman);
+
+  // Fuzzy Rules
+  int ruleNum = 1;
+  for (int i = 0; i < 5; i++) {
+    for (int j = 0; j < 5; j++) {
+      FuzzyRuleAntecedent *antecedent = new FuzzyRuleAntecedent();
+      antecedent->joinWithAND(kecepatanSet[i], jarakSet[j]);
+
+      FuzzyRuleConsequent *consequent = new FuzzyRuleConsequent();
+      int remIndex = constrain(i + (4 - j), 0, 4);
+      consequent->addOutput(remSet[remIndex]);
+
+      FuzzyRule *rule = new FuzzyRule(ruleNum++, antecedent, consequent);
+      fuzzy->addFuzzyRule(rule);
+    }
+  }
+}
+
+void loop() {
+  // Terima data dari TX
+  if (radio.available()) {
+    radio.read(&data, sizeof(data));
+  }
+
+  // Baca Jarak
+  digitalWrite(trigPin, LOW); delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH); delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  int distance = duration * 0.034 / 2;
+  distance = constrain(distance, 0, 50);
+
+  // Hitung Kecepatan dari Encoder tiap 1 detik
+  unsigned long currentTime = millis();
+  if (currentTime - lastTime >= 1000) {
+    speedRPM = (pulseCount / 20.0) * 60.0;
+    pulseCount = 0;
+    lastTime = currentTime;
+  }
+
+  // Gunakan nilai dari TX
+  int targetPWM = constrain(data.motorSpeed, 0, 255);
+
+  // Fuzzifikasi
+  float speedMapped = constrain(speedRPM, 0, 100);
+  fuzzy->setInput(1, speedMapped);
+  fuzzy->setInput(2, distance);
+  fuzzy->fuzzify();
+  int brakeValue = fuzzy->defuzzify(1);
+
+  int brakePWM = map(brakeValue, 0, 100, 255, 0);
+  if (distance <= 5) brakePWM = 0;
+  brakePWM = constrain(brakePWM, 0, 255);
+
+  // Gunakan braking fuzzy jika jarak < 50 cm
+  int finalPWM = (distance < 50) ? brakePWM : targetPWM;
+
+  // Motor Aktif
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  analogWrite(ENB, finalPWM);
+
+  // Debug Serial
+  Serial.println("================================");
+  Serial.print("Target PWM dari TX: "); Serial.println(targetPWM);
+  Serial.print("Kecepatan (RPM): "); Serial.println(speedRPM);
+  Serial.print("Jarak (cm): "); Serial.println(distance);
+  Serial.print("Brake Value: "); Serial.println(brakeValue);
+  Serial.print("PWM Motor: "); Serial.println(finalPWM);
+  Serial.print("Servo (dari TX): "); Serial.println(data.servoAngle);
+  Serial.println("================================");
+
+  delay(1000);
+}
