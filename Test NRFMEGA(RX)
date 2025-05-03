@@ -3,9 +3,11 @@
 #include <RF24.h>
 #include <Servo.h>
 
-// Pin NRF24L01 untuk Mega
-#define CE_PIN 9
-#define CSN_PIN 10
+#define CE_PIN 48
+#define CSN_PIN 49
+
+RF24 radio(CE_PIN, CSN_PIN);
+
 
 // Pin Output
 #define MOTOR_PIN 5     // PWM output untuk motor DC (via driver)
