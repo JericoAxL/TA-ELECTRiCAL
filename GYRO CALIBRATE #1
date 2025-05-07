@@ -1,0 +1,47 @@
+#include <Wire.h>
+#include <MPU6050.h>
+
+MPU6050 mpu;
+
+void setup() {
+  // Inisialisasi komunikasi I2C
+  Wire.begin();
+  Serial.begin(9600);
+
+  // Inisialisasi MPU6050
+  mpu.initialize();
+
+  // Cek apakah MPU6050 terhubung dengan benar
+  if (mpu.testConnection()) {
+    Serial.println("MPU6050 terhubung dengan benar");
+  } else {
+    Serial.println("MPU6050 gagal terhubung");
+    while (1);
+  }
+}
+
+void loop() {
+  // Membaca data akselerometer (accelerometer)
+  int16_t ax, ay, az;
+  int16_t gx, gy, gz;
+  
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  
+  // Menghitung sudut pitch dan roll dari data akselerometer
+  float pitch = atan2(ay, az) * 180.0 / PI;  // Menghitung sudut pitch
+  float roll = atan2(ax, az) * 180.0 / PI;   // Menghitung sudut roll
+  
+  // Mengubah rentang sudut Pitch (dari -90° hingga 90°) ke rentang 0° hingga 180°
+  pitch = map(pitch, -90, 90, 0, 180);
+  
+  // Mengubah rentang sudut Roll (dari -180° hingga 180°) ke rentang 0° hingga 180°
+  roll = map(roll, -90, 90, 0, 180);
+  
+  // Menampilkan hasil sudut pitch dan roll ke Serial Monitor
+  Serial.print("Pitch: ");
+  Serial.print(pitch);
+  Serial.print(" , Roll: ");
+  Serial.println(roll);
+  
+  delay(0);  // Delay untuk update data setiap 0.5 detik
+}
