@@ -1,0 +1,28 @@
+#include <Servo.h>
+
+Servo servoGerak;
+int posisi = 90;  // Posisi default servo
+
+void setup() {
+  Serial.begin(9600);       // Inisialisasi Serial Monitor
+  servoGerak.attach(3);     // Servo terhubung ke pin 3
+  servoGerak.write(posisi); // Posisi awal servo
+  Serial.println("Ketik nilai 0–180 untuk menggerakkan servo:");
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n'); // Baca input hingga newline
+    input.trim();  // Hilangkan spasi/kosong di awal/akhir
+    int nilai = input.toInt();  // Ubah ke integer
+
+    if (nilai >= 0 && nilai <= 180) {
+      posisi = nilai;
+      servoGerak.write(posisi);
+      Serial.print("Servo digerakkan ke posisi: ");
+      Serial.println(posisi);
+    } else {
+      Serial.println("Input tidak valid. Masukkan angka 0–180.");
+    }
+  }
+}
