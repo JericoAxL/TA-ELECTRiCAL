@@ -1,0 +1,54 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <Servo.h>
+
+MPU6050 mpu;
+Servo servo;
+
+int servoPin = 3;
+
+void setup() {
+  // Inisialisasi komunikasi I2C dan Serial
+  Wire.begin();
+  Serial.begin(9600);
+
+  // Inisialisasi MPU6050
+  mpu.initialize();
+
+  // Cek koneksi MPU6050
+  if (mpu.testConnection()) {
+    Serial.println("MPU6050 terhubung dengan benar");
+  } else {
+    Serial.println("MPU6050 gagal terhubung");
+    while (1);
+  }
+
+  // Inisialisasi servo
+  servo.attach(servoPin);
+}
+
+void loop() {
+  // Baca data akselerometer dan gyroscope
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // Hitung pitch dari akselerometer
+  float pitchRaw = atan2(ay, az) * 180.0 / PI;
+
+  // Konversi dari -90..90 derajat menjadi 0..180 derajat
+  float pitchMapped = map(pitchRaw, -90, 90, 0, 180);
+
+  // Batasi agar tidak melebihi rentang servo
+  pitchMapped = constrain(pitchMapped, 0, 180);
+
+  // Gerakkan servo sesuai sudut pitch
+  servo.write(pitchMapped);
+
+  // Tampilkan ke Serial Monitor
+  Serial.print("Pitch Asli: ");
+  Serial.print(pitchRaw);
+  Serial.print(" | Servo: ");
+  Serial.println(pitchMapped);
+
+  delay(50);  // Delay agar tidak terlalu cepat pembacaannya
+}
