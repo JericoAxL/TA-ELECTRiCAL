@@ -1,0 +1,279 @@
+// === MEGA RX CODE WITH PID ADJUSTABLE SHOCK (SWAPPED PITCH <-> ROLL) ===
+#include <Wire.h>
+#include <MPU6050.h>
+#include <Adafruit_PWMServoDriver.h>
+#include <Servo.h>
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
+RF24 radio(48, 49); // CE, CSN
+const byte alamatTujuan[] = "node1";
+
+struct PayloadTX {
+  uint8_t pwm;
+  uint8_t deg;
+};
+
+struct PayloadRX {
+  uint8_t roll1_actual;
+  uint8_t pitch1_actual;
+  uint8_t roll2_medan;
+  uint8_t pitch2_medan;
+  uint8_t s1;
+  uint8_t s2;
+  uint8_t s3;
+  uint8_t s4;
+};
+
+PayloadTX dataMasuk;
+PayloadRX dataKeluar;
+
+const int ENA = 3;
+const int IN1 = 6;
+const int IN2 = 7;
+Servo servoKendali;
+const int servoPin = 8;
+
+Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
+
+const int CH_FL = 0;
+const int CH_FR = 1;
+const int CH_RR = 2;
+const int CH_RL = 3;
+
+int pulseFromDegree(int deg) {
+  return map(deg, 0, 180, 102, 512); // 0.5ms to 2.5ms for 50Hz
+}
+
+MPU6050 mpu1(0x69); // Body mobil
+MPU6050 mpu2(0x68); // Deteksi medan
+
+long ax1_off, ay1_off, az1_off;
+long ax2_off, ay2_off, az2_off;
+
+// PID Roll (as original Pitch)
+float Kp_roll = 1.8, Ki_roll = 0.0, Kd_roll = 0.5;
+float errorRoll, prevErrorRoll = 0, integralRoll = 0, outputRoll;
+
+// PID Pitch (as original Roll)
+float Kp_pitch = 1.8, Ki_pitch = 0.0, Kd_pitch = 0.5;
+float errorPitch, prevErrorPitch = 0, integralPitch = 0, outputPitch;
+
+void calibrateMPU(MPU6050 &mpu, long &ax_off, long &ay_off, long &az_off) {
+  int16_t ax, ay, az, gx, gy, gz;
+  long sum_ax = 0, sum_ay = 0, sum_az = 0;
+  const int samples = 1000;
+  for (int i = 0; i < samples; i++) {
+    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    sum_ax += ax;
+    sum_ay += ay;
+    sum_az += az;
+    delay(2);
+  }
+  ax_off = sum_ax / samples;
+  ay_off = sum_ay / samples;
+  az_off = (sum_az / samples) - 16384;
+}
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  servoKendali.attach(servoPin);
+
+  Wire.begin();
+  mpu1.initialize();
+  mpu2.initialize();
+
+  Serial.println("Kalibrasi MPU1...");
+  calibrateMPU(mpu1, ax1_off, ay1_off, az1_off);
+  Serial.println("Kalibrasi MPU2...");
+  calibrateMPU(mpu2, ax2_off, ay2_off, az2_off);
+
+  pca.begin();
+  pca.setPWMFreq(50);
+
+  radio.begin();
+  radio.setPALevel(RF24_PA_LOW);
+  radio.setDataRate(RF24_250KBPS);
+  radio.openReadingPipe(1, alamatTujuan);
+  radio.openWritingPipe(alamatTujuan);
+  radio.startListening();
+}
+
+void loop() {
+  if (radio.available()) {
+    radio.read(&dataMasuk, sizeof(dataMasuk));
+
+    int pwmVal = dataMasuk.pwm;
+    if (pwmVal > 137) {
+      digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+      analogWrite(ENA, pwmVal - 128);
+    } else if (pwmVal < 117) {
+      digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
+      analogWrite(ENA, 128 - pwmVal);
+    } else {
+      digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
+      analogWrite(ENA, 0);
+    }
+
+    servoKendali.write(dataMasuk.deg);
+  }
+
+  int16_t ax1, ay1, az1, gx1, gy1, gz1;
+  mpu1.getMotion6(&ax1, &ay1, &az1, &gx1, &gy1, &gz1);
+  float ax1f = ax1 - ax1_off;
+  float ay1f = ay1 - ay1_off;
+  float az1f = az1 - az1_off;
+  float roll1 = 90.0 + atan2(-ax1f, sqrt(ay1f * ay1f + az1f * az1f)) * 180.0 / PI;
+  float pitch1  = 90.0 + atan2(ay1f, az1f) * 180.0 / PI;
+
+  int16_t ax2, ay2, az2, gx2, gy2, gz2;
+  mpu2.getMotion6(&ax2, &ay2, &az2, &gx2, &gy2, &gz2);
+  float ax2f = ax2 - ax2_off;
+  float ay2f = ay2 - ay2_off;
+  float az2f = az2 - az2_off;
+  float roll2 = 90.0 + atan2(-ax2f, sqrt(ay2f * ay2f + az2f * az2f)) * 180.0 / PI;
+  float pitch2  = 90.0 + atan2(ay2f, az2f) * 180.0 / PI;
+
+  // PID Roll
+  errorRoll = roll2 - roll1;
+  integralRoll += errorRoll;
+  float derivativeRoll = errorRoll - prevErrorRoll;
+  outputRoll = Kp_roll * errorRoll + Ki_roll * integralRoll + Kd_roll * derivativeRoll;
+  prevErrorRoll = errorRoll;
+
+  // PID Pitch
+  errorPitch = pitch2 - pitch1;
+  integralPitch += errorPitch;
+  float derivativePitch = errorPitch - prevErrorPitch;
+  outputPitch = Kp_pitch * errorPitch + Ki_pitch * integralPitch + Kd_pitch * derivativePitch;
+  prevErrorPitch = errorPitch;
+
+  // Servo positions
+  int degFL = constrain(90 + outputRoll + outputPitch, 40, 140);
+  int degFR = constrain(90 + outputRoll - outputPitch, 40, 140);
+  int degRR = constrain(90 - outputRoll - outputPitch, 40, 140);
+  int degRL = constrain(90 - outputRoll + outputPitch, 40, 140);
+
+  pca.setPWM(CH_FL, 0, pulseFromDegree(degFL));
+  pca.setPWM(CH_FR, 0, pulseFromDegree(degFR));
+  pca.setPWM(CH_RR, 0, pulseFromDegree(degRR));
+  pca.setPWM(CH_RL, 0, pulseFromDegree(degRL));
+
+  dataKeluar.roll1_actual = (uint8_t)roll1;
+  dataKeluar.pitch1_actual  = (uint8_t)pitch1;
+  dataKeluar.roll2_medan  = (uint8_t)roll2;
+  dataKeluar.pitch2_medan   = (uint8_t)pitch2;
+  dataKeluar.s1 = degFL;
+  dataKeluar.s2 = degFR;
+  dataKeluar.s3 = degRR;
+  dataKeluar.s4 = degRL;
+
+  radio.stopListening();
+  radio.write(&dataKeluar, sizeof(dataKeluar));
+  radio.startListening();
+
+  Serial.print("MPU1 Roll:"); Serial.print(roll1);
+  Serial.print(" Pitch:"); Serial.print(pitch1);
+  Serial.print(" || MPU2 Roll:"); Serial.print(roll2);
+  Serial.print(" Pitch:"); Serial.print(pitch2);
+  Serial.print(" || Servo FL:"); Serial.print(degFL);
+  Serial.print(" FR:"); Serial.print(degFR);
+  Serial.print(" RR:"); Serial.print(degRR);
+  Serial.print(" RL:"); Serial.println(degRL);
+}
+======================================
+// nano tx terbaru
+// === ARDUINO NANO - TX ===
+#include <Wire.h>
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+RF24 radio(9, 10); // CE, CSN
+const byte alamatTujuan[] = "node1";
+
+struct PayloadTX {
+  uint8_t pwm;
+  uint8_t deg;
+};
+
+struct PayloadRX {
+  // Penamaan sudah dibalik agar sesuai orientasi baru
+  uint8_t roll1_actual;   // Awalnya pitch1_actual
+  uint8_t pitch1_actual;  // Awalnya roll1_actual
+  uint8_t roll2_medan;    // Awalnya pitch2_medan
+  uint8_t pitch2_medan;   // Awalnya roll2_medan
+  uint8_t s1;
+  uint8_t s2;
+  uint8_t s3;
+  uint8_t s4;
+};
+
+PayloadTX dataOut;
+PayloadRX dataIn;
+
+void setup() {
+  Serial.begin(9600);
+  radio.begin();
+  radio.setPALevel(RF24_PA_LOW);
+  radio.setDataRate(RF24_250KBPS);
+  radio.openWritingPipe(alamatTujuan);
+  radio.openReadingPipe(1, alamatTujuan);
+  radio.stopListening();
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("OLED failed"));
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("TX Ready...");
+  display.display();
+}
+
+void loop() {
+  int pot1 = analogRead(A0); // Untuk motor DC
+  int pot2 = analogRead(A1); // Untuk servo
+
+  dataOut.pwm = map(pot1, 0, 1023, 0, 255);
+  dataOut.deg = map(pot2, 0, 1023, 40, 140);
+
+  bool terkirim = radio.write(&dataOut, sizeof(dataOut));
+
+  radio.startListenaing();
+  unsigned long start = millis();
+  while (!radio.available() && millis() - start < 100);
+  if (radio.available()) {
+    radio.read(&dataIn, sizeof(dataIn));
+  }
+  radio.stopListening();
+
+  // OLED Tampilan
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println(terkirim ? "TX: Terkirim" : "TX: Gagal");
+  display.print("PWM: "); display.println(dataOut.pwm);
+  display.print("Degre: "); display.println(dataOut.deg);
+  display.print("GY1(R): "); display.print(dataIn.roll1_actual);  // Dulu pitch
+  display.print(" P: "); display.println(dataIn.pitch1_actual);   // Dulu roll
+  display.print("GY2(R): "); display.print(dataIn.roll2_medan);   // Dulu pitch
+  display.print(" P: "); display.println(dataIn.pitch2_medan);    // Dulu roll
+  display.print("s1:"); display.print(dataIn.s1);
+  display.print(" s2:"); display.print(dataIn.s2);
+  display.print(" s3:"); display.print(dataIn.s3);
+  display.print(" s4:"); display.println(dataIn.s4);
+  display.display();
+}
